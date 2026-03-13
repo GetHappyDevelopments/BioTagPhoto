@@ -1,20 +1,25 @@
 # BioTagPhoto
 
-BioTagPhoto is a local desktop application for reviewing photos, detecting faces, assigning people, and writing selected person tags back to image metadata.
+BioTagPhoto is a local Windows desktop application for organizing people in photos. It helps you detect faces, review unknown matches, assign people, and write selected names back into image metadata without uploading your photo library to a cloud service.
 
-The application is built with:
+Version: `2026.02.01BETA`
 
-- Python
-- PySide6
-- SQLite
-- OpenCV
-- optional InsightFace face analysis models
+## Why BioTagPhoto
 
-## Current Status
+- local-first photo review for face-based organization
+- manual review workflow instead of silent background tagging
+- person assignments, prototype embeddings, and similarity suggestions
+- XMP tagging for selected person names
+- backup and restore for the local database
+- Windows release pipeline with PyInstaller and Inno Setup
 
-The repository contains the application source code, UI assets, release pipeline files, and legal/license documents required to build and run the project.
+## Highlights
 
-The InsightFace model pack `buffalo_l` is **not** included in this repository and is **not** distributed with the application.
+- `Unknown` review page for newly detected faces
+- `People` page for grouped faces and person-level actions
+- metadata viewer for EXIF, IPTC, and XMP where available
+- optional face-analysis model integration via InsightFace
+- no bundled face model weights in this repository or installer
 
 ## Screenshots
 
@@ -26,72 +31,62 @@ The InsightFace model pack `buffalo_l` is **not** included in this repository an
 
 ![BioTagPhoto Settings Dialog](docs/screenshots/settings-dialog.png)
 
-## Features
+## Quick Start
 
-- analyze configured source folders for faces
-- manage unknown, suggested, and assigned faces
-- review person pages and image metadata
-- write selected person names into XMP metadata
-- export and import local database backups
-- build Windows releases with PyInstaller and Inno Setup
-
-## Typical Workflow
-
-1. Start the application.
-2. Configure the InsightFace model path when prompted, or later via `Settings > Models`.
-3. Add source folders in `Settings > Sources`.
-4. Run `Analyze Images` from the `Unknown` screen.
-5. Review unknown faces and assign them to existing or new people.
-6. Open `People` to review grouped faces and manage metadata.
-7. Optionally write person names back to XMP using `Tag Photo`.
-8. Export a backup before major data changes.
-
-## Requirements
-
-- Windows recommended
-- Python 3.10 or 3.11 recommended for best third-party wheel support
-- a local virtual environment (`.venv`)
-- separate installation of the InsightFace model pack if you want face analysis
-
-## Setup
-
-Create and activate a virtual environment:
+### Option 1: Run from source
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-Start the application:
-
-```powershell
 python main.py
 ```
 
-## Development Setup
+### Option 2: Use a release build
 
-For tests and release tooling:
-
-```powershell
-pip install -r requirements-dev.txt
-```
-
-Useful checks:
+Build the Windows app bundle:
 
 ```powershell
-python -m compileall -q .
-python -m py_compile main.py db.py ui\main_window.py
-python tools\sanity_check.py
+.\tools\build_release.ps1 -SkipInstaller
 ```
+
+Build bundle and installer:
+
+```powershell
+.\tools\build_release.ps1
+```
+
+Outputs:
+
+```text
+dist\BioTagPhoto\BioTagPhoto.exe
+release\BioTagPhoto_Setup_2026.02.01BETA.exe
+```
+
+## Typical Workflow
+
+1. Start BioTagPhoto.
+2. Configure the InsightFace model folder when prompted, or later via `Settings > Models`.
+3. Add one or more source folders in `Settings > Sources`.
+4. Open `Unknown` and run `Analyze Images`.
+5. Review unknown faces and assign them to an existing or new person.
+6. Open `People` to inspect grouped faces, remove wrong assignments, and view metadata.
+7. Optionally write a selected person's name into XMP with `Tag Photo`.
+8. Export a backup before major data changes.
+
+## Requirements
+
+- Windows recommended
+- Python 3.10 or 3.11 recommended for best third-party wheel support
+- local virtual environment for source-based development
+- separate installation of the InsightFace `buffalo_l` model pack if you want face analysis
 
 ## Model Setup
 
 BioTagPhoto does not ship the `buffalo_l` model pack.
 
-You must download and install it separately, then configure the model folder in the application.
-On first start, BioTagPhoto will prompt for the folder if it is not configured yet.
+You must download and install it separately, then configure the model folder in the application. On first start, BioTagPhoto prompts for the folder if it is not configured yet.
 
 Expected structure:
 
@@ -105,41 +100,39 @@ Typical location used by InsightFace:
 %USERPROFILE%\.insightface\models
 ```
 
-## Release Build
+## Development Setup
 
-Build only the application bundle:
-
-```powershell
-.\tools\build_release.ps1 -SkipInstaller
-```
-
-Build bundle and installer:
+Install runtime and development tooling:
 
 ```powershell
-.\tools\build_release.ps1
+pip install -r requirements-dev.txt
 ```
 
-Expected outputs:
+Useful checks:
 
-```text
-dist\BioTagPhoto\BioTagPhoto.exe
-release\BioTagPhoto_Setup_2026.02.01BETA.exe
+```powershell
+python -m compileall -q .
+python -m py_compile main.py db.py ui\main_window.py
+python tools\sanity_check.py
 ```
 
 ## Repository Layout
 
 ```text
-ui/              Qt UI pages, dialogs, workers, and jobs
-packaging/       PyInstaller and Inno Setup configuration
-tools/           helper scripts and sanity checks
-docs/screenshots README screenshots
-main.py          application entry point
-db.py            SQLite schema and data access
+ui/                Qt UI pages, dialogs, workers, and jobs
+packaging/         PyInstaller and Inno Setup configuration
+tools/             helper scripts and sanity checks
+docs/screenshots/  README screenshots
+main.py            application entry point
+db.py              SQLite schema and data access
+embeddings.py      embedding rebuild helpers
 ```
 
 ## Legal and Licensing
 
-Read these files before distribution or commercial use:
+BioTagPhoto source code is released under the `MIT` license.
+
+Before distribution or commercial use, read:
 
 - `LICENSE`
 - `NOTICE`
@@ -148,8 +141,13 @@ Read these files before distribution or commercial use:
 - `LEGAL.md`
 
 Important:
-Third-party libraries and model files are subject to their own license terms. The source code license of BioTagPhoto does not automatically apply to external models.
+Third-party libraries and model files are subject to their own license terms. The BioTagPhoto source code license does not automatically apply to external models.
 
 ## Contributing
 
 See `CONTRIBUTING.md`.
+
+## Contact
+
+Thomas Steier  
+BioTagPhoto@steier-familie.de
