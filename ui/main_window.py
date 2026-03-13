@@ -41,6 +41,7 @@ from db import (
     remove_excluded_face,
     remove_excluded_image,
     remove_source_folder,
+    reset_database_to_factory,
 )
 from model_config import (
     describe_model_root,
@@ -680,17 +681,14 @@ class MainWindow(QMainWindow):
         ):
             return (False, "Cannot reset while import or rebuild is running.")
 
-        db_file = DB_PATH
         try:
-            if db_file.exists():
-                db_file.unlink()
-            init_db()
+            reset_database_to_factory()
         except Exception as exc:
             return (False, f"Database reset failed:\n{exc}")
 
         self._mark_all_pages_dirty()
         self._refresh_current_page_if_dirty()
-        return (True, "Database was deleted and re-initialized to factory state.")
+        return (True, "Database was reset to factory state.")
 
     def _mk_tab(self, text: str) -> QPushButton:
         b = QPushButton(text)

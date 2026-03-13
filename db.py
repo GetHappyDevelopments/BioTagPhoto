@@ -16,6 +16,14 @@ DB_PATH = APP_DATA_DIR / "tagthatphoto.db"
 DEFAULT_MODEL_ID = "default"
 
 
+class ManagedConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
+
+
 def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -39,10 +47,15 @@ def _migrate_legacy_db_if_needed() -> None:
 def get_connection() -> sqlite3.Connection:
     _ensure_db_parent()
     _migrate_legacy_db_if_needed()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=ManagedConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
+
+
+def _quote_identifier(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -337,6 +350,39 @@ def normalize_image_path(path: str) -> str:
 
 
 def init_db() -> None:
+    ensure_schema()
+
+
+def reset_database_to_factory() -> None:
+    with get_connection() as conn:
+        names = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type IN ('table', 'view', 'trigger')
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY
+                CASE type
+                    WHEN 'trigger' THEN 0
+                    WHEN 'view' THEN 1
+                    ELSE 2
+                END,
+                name
+            """
+        ).fetchall()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            for row in names:
+                raw_name = row["name"] if isinstance(row, sqlite3.Row) else row[0]
+                if raw_name is None:
+                    continue
+                quoted = _quote_identifier(str(raw_name))
+                conn.execute(f"DROP TABLE IF EXISTS {quoted}")
+                conn.execute(f"DROP VIEW IF EXISTS {quoted}")
+                conn.execute(f"DROP TRIGGER IF EXISTS {quoted}")
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
     ensure_schema()
 
 
