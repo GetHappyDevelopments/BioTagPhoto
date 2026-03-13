@@ -75,6 +75,25 @@ release\BioTagPhoto_Setup_2026.02.01BETA.exe
 7. Optionally write a selected person's name into XMP with `Tag Photo`.
 8. Export a backup before major data changes.
 
+## Changelog
+
+For release history and recent changes, see `CHANGELOG.md`.
+
+## Known Limitations
+
+- Windows is the primary supported platform at the moment.
+- Face analysis depends on a separately installed InsightFace model pack.
+- The default workflow is optimized for local desktop use, not multi-user collaboration.
+- Metadata write-back currently focuses on practical XMP tagging rather than full DAM coverage.
+- Face matching quality depends heavily on the external model, source image quality, and review discipline.
+
+## Roadmap
+
+- improve background-job progress reporting across long-running workflows
+- continue tightening repository packaging and release automation
+- expand metadata and export/import interoperability
+- further refine review workflows for fast face triage and correction
+
 ## Requirements
 
 - Windows recommended
