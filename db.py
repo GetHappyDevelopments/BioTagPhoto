@@ -12,7 +12,7 @@ from uuid import uuid4
 import numpy as np
 
 APP_DATA_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "BioTagPhoto"
-DB_PATH = APP_DATA_DIR / "tagthatphoto.db"
+DB_PATH = APP_DATA_DIR / "biotagphoto.db"
 DEFAULT_MODEL_ID = "default"
 
 
@@ -33,16 +33,23 @@ def _ensure_db_parent() -> None:
 
 
 def _migrate_legacy_db_if_needed() -> None:
-    legacy = Path.cwd() / "tagthatphoto.db"
     if DB_PATH.exists():
         return
-    if not legacy.exists():
-        return
-    if legacy.resolve() == DB_PATH.resolve():
-        return
-    _ensure_db_parent()
-    shutil.copy2(legacy, DB_PATH)
 
+    legacy_candidates = (
+        APP_DATA_DIR / "tagthatphoto.db",
+        Path.cwd() / "biotagphoto.db",
+        Path.cwd() / "tagthatphoto.db",
+    )
+
+    for legacy in legacy_candidates:
+        if not legacy.exists():
+            continue
+        if legacy.resolve() == DB_PATH.resolve():
+            continue
+        _ensure_db_parent()
+        shutil.copy2(legacy, DB_PATH)
+        return
 
 def get_connection() -> sqlite3.Connection:
     _ensure_db_parent()

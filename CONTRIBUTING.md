@@ -1,4 +1,4 @@
-﻿# Contributing to BioTagPhoto
+# Contributing to BioTagPhoto
 
 Thank you for contributing to BioTagPhoto.
 
@@ -80,7 +80,7 @@ If you change the schema:
 
 Never commit local runtime databases such as:
 
-- `tagthatphoto.db`
+- `biotagphoto.db`
 - files in `data/`
 - exported backup files like `*.btp`
 

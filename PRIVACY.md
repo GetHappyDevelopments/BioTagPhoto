@@ -46,7 +46,7 @@ Storage Location
 
 By default, the local application database is stored on Windows under:
 
-%LocalAppData%\BioTagPhoto\tagthatphoto.db
+%LocalAppData%\BioTagPhoto\biotagphoto.db
 
 Additional settings are stored via platform settings storage used by Qt / QSettings.
 

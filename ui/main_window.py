@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from html import escape
@@ -447,7 +447,7 @@ class MainWindow(QMainWindow):
 
             with sqlite3.connect(DB_PATH) as src, sqlite3.connect(tmp_db_path) as dst:
                 src.backup(dst)
-            db_name = "tagthatphoto.db"
+            db_name = "biotagphoto.db"
             db_bytes = tmp_db_path.read_bytes()
             db_size = int(len(db_bytes))
             db_sha256 = self._sha256_bytes(db_bytes)
