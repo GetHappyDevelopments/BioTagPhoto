@@ -14,7 +14,15 @@ import numpy as np
 APP_DATA_DIR = Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "BioTagPhoto"
 DB_PATH = APP_DATA_DIR / "biotagphoto.db"
 DEFAULT_MODEL_ID = "default"
+SQLITE_IN_CHUNK = 2000
 
+
+
+def _chunked_ids(values: Sequence[int], chunk_size: int = SQLITE_IN_CHUNK) -> Iterable[List[int]]:
+    size = max(1, int(chunk_size))
+    items = [int(v) for v in values]
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
 
 class ManagedConnection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -1197,16 +1205,20 @@ def get_face_embeddings(face_ids: Sequence[int]) -> Dict[int, np.ndarray]:
     ids = [int(fid) for fid in face_ids]
     if not ids:
         return {}
-    placeholders = ",".join("?" for _ in ids)
-    with get_connection() as conn:
-        rows = conn.execute(f"SELECT face_id, embedding FROM face_embeddings WHERE face_id IN ({placeholders})", ids).fetchall()
-    out: Dict[int, np.ndarray] = {}
-    for row in rows:
-        if row["face_id"] is None or row["embedding"] is None:
-            continue
-        out[int(row["face_id"])] = _normalize(_unpack_f32(cast(bytes, row["embedding"])))
-    return out
 
+    out: Dict[int, np.ndarray] = {}
+    with get_connection() as conn:
+        for chunk in _chunked_ids(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT face_id, embedding FROM face_embeddings WHERE face_id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                if row["face_id"] is None or row["embedding"] is None:
+                    continue
+                out[int(row["face_id"])] = _normalize(_unpack_f32(cast(bytes, row["embedding"])))
+    return out
 
 def cosine_similarity_01(a: np.ndarray, b: np.ndarray) -> float:
     va = _normalize(a)
@@ -1251,30 +1263,30 @@ def suggest_people_for_faces(face_ids: Sequence[int], top_k: int = 3, model_id: 
     min_count = max(1, int(min_samples))
     k = max(1, int(top_k))
 
-    placeholders = ",".join("?" for _ in ids)
-    with get_connection() as conn:
-        fe_rows = conn.execute(
-            f"""
-            SELECT face_id, embedding, dim
-            FROM face_embeddings
-            WHERE face_id IN ({placeholders})
-              AND COALESCE(NULLIF(model_id, ''), ?) = ?
-            """,
-            [*ids, DEFAULT_MODEL_ID, target_model_id],
-        ).fetchall()
-
     face_embeddings: Dict[int, np.ndarray] = {}
-    for row in fe_rows:
-        if row["face_id"] is None or row["embedding"] is None or row["dim"] is None:
-            continue
-        dim = int(row["dim"])
-        if dim <= 0:
-            continue
-        try:
-            vec = _normalize(unpack_embedding(cast(bytes, row["embedding"]), dim))
-        except Exception:
-            continue
-        face_embeddings[int(row["face_id"])] = np.asarray(vec, dtype=np.float32)
+    with get_connection() as conn:
+        for chunk in _chunked_ids(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            fe_rows = conn.execute(
+                f"""
+                SELECT face_id, embedding, dim
+                FROM face_embeddings
+                WHERE face_id IN ({placeholders})
+                  AND COALESCE(NULLIF(model_id, ''), ?) = ?
+                """,
+                [*chunk, DEFAULT_MODEL_ID, target_model_id],
+            ).fetchall()
+            for row in fe_rows:
+                if row["face_id"] is None or row["embedding"] is None or row["dim"] is None:
+                    continue
+                dim = int(row["dim"])
+                if dim <= 0:
+                    continue
+                try:
+                    vec = _normalize(unpack_embedding(cast(bytes, row["embedding"]), dim))
+                except Exception:
+                    continue
+                face_embeddings[int(row["face_id"])] = np.asarray(vec, dtype=np.float32)
     if not face_embeddings:
         return out
 
@@ -1347,7 +1359,6 @@ def suggest_people_for_faces(face_ids: Sequence[int], top_k: int = 3, model_id: 
             out[int(fid)] = [(int(proto_ids[j]), float(row_scores[j])) for j in order]
 
     return out
-
 
 def recompute_person_prototype(person_id: int, model_id: str = DEFAULT_MODEL_ID, **kwargs: Any) -> None:
     legacy_model = kwargs.pop("model", None)

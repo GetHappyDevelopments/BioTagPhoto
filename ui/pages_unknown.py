@@ -1,12 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, cast
 
 import cv2
+import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -32,7 +34,10 @@ import db as dbmod
 ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
 ASPECT_KEEP = Qt.AspectRatioMode.KeepAspectRatio
 TRANS_SMOOTH = Qt.TransformationMode.SmoothTransformation
-IMG_RGB888 = QImage.Format.Format_RGB888
+
+DEFAULT_PAGE_SIZE = 240
+PAGE_SIZE_OPTIONS = (120, 240, 480, 960)
+THUMB_JPEG_QUALITY = 85
 
 
 PAGE_QSS = """
@@ -187,7 +192,11 @@ class UnknownPage(QWidget):
         self._selected_ids: list[int] = []
         self._thumb_cache: dict[tuple[int, int], QPixmap] = {}
         self._image_cache: OrderedDict[str, Any] = OrderedDict()
-        self._image_cache_max = 48
+        self._image_cache_max = 24
+        self._current_page = 0
+        self._page_size = int(DEFAULT_PAGE_SIZE)
+        self._thumb_root = Path(getattr(dbmod, "APP_DATA_DIR", Path.cwd())) / "face_thumbs"
+        self._thumb_root.mkdir(parents=True, exist_ok=True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -243,6 +252,36 @@ class UnknownPage(QWidget):
         actions.addStretch(1)
         root.addLayout(actions)
 
+        paging = QHBoxLayout()
+        paging.setSpacing(8)
+
+        self.btn_prev = QPushButton("Previous")
+        self.btn_prev.setObjectName("Ghost")
+        self.btn_prev.clicked.connect(self._go_prev_page)
+        paging.addWidget(self.btn_prev)
+
+        self.btn_next = QPushButton("Next")
+        self.btn_next.setObjectName("Ghost")
+        self.btn_next.clicked.connect(self._go_next_page)
+        paging.addWidget(self.btn_next)
+
+        self.page_info = QLabel("")
+        self.page_info.setObjectName("Subtle")
+        paging.addWidget(self.page_info)
+
+        paging.addStretch(1)
+        paging.addWidget(QLabel("Per page:"))
+
+        self.page_size_box = QComboBox()
+        for value in PAGE_SIZE_OPTIONS:
+            self.page_size_box.addItem(str(value), int(value))
+        idx = self.page_size_box.findData(int(self._page_size))
+        if idx >= 0:
+            self.page_size_box.setCurrentIndex(idx)
+        self.page_size_box.currentIndexChanged.connect(self._on_page_size_changed)
+        paging.addWidget(self.page_size_box)
+        root.addLayout(paging)
+
         self.subtle = QLabel("")
         self.subtle.setObjectName("Subtle")
         root.addWidget(self.subtle)
@@ -268,9 +307,11 @@ class UnknownPage(QWidget):
     ) -> None:
         cb = progress_cb if callable(progress_cb) else None
         if cb is not None:
-            cb(0, 1, "Loading unknown faces...")
+            cb(0, 2, "Loading unknown faces...")
         self._faces = db_list_unknown_faces()
         self._prune_thumb_cache({int(face.face_id) for face in self._faces})
+        if cb is not None:
+            cb(1, 2, "Applying filters...")
         self._apply_filter(progress_cb=cb)
 
     def _prune_thumb_cache(self, valid_face_ids: set[int]) -> None:
@@ -299,8 +340,28 @@ class UnknownPage(QWidget):
         self._filtered = faces
         visible = {f.face_id for f in self._filtered}
         self._selected_ids = [fid for fid in self._selected_ids if fid in visible]
+
+        total_pages = self._total_pages()
+        if total_pages <= 0:
+            self._current_page = 0
+        else:
+            self._current_page = max(0, min(self._current_page, total_pages - 1))
+
         self._render(progress_cb=progress_cb)
+        self._update_pagination_controls()
         self._update_status()
+
+    def _total_pages(self) -> int:
+        if not self._filtered:
+            return 0
+        return (len(self._filtered) + self._page_size - 1) // self._page_size
+
+    def _page_slice(self) -> list[UnknownFace]:
+        if not self._filtered:
+            return []
+        start = int(self._current_page * self._page_size)
+        end = min(len(self._filtered), start + self._page_size)
+        return self._filtered[start:end]
 
     def _render(self, progress_cb: Callable[[int, int, str], None] | None = None) -> None:
         while self.grid.count():
@@ -311,7 +372,8 @@ class UnknownPage(QWidget):
             if w is not None:
                 w.deleteLater()
 
-        if not self._filtered:
+        page_faces = self._page_slice()
+        if not page_faces:
             lbl = QLabel("No unknown faces.")
             lbl.setObjectName("Subtle")
             self.grid.addWidget(lbl, 0, 0, alignment=ALIGN_CENTER)
@@ -322,10 +384,13 @@ class UnknownPage(QWidget):
         cols = 6
         r = 0
         c = 0
-        total = max(1, len(self._filtered))
+        total = max(1, len(page_faces))
+        start_index = self._current_page * self._page_size + 1
+        end_index = start_index + len(page_faces) - 1
         if progress_cb is not None:
-            progress_cb(0, total, "Preparing unknown face tiles...")
-        for i, face in enumerate(self._filtered, start=1):
+            progress_cb(0, total, f"Preparing unknown face tiles {start_index}-{end_index}...")
+
+        for i, face in enumerate(page_faces, start=1):
             tile = FaceTile(
                 face=face,
                 pix=self._face_pixmap(face, 120),
@@ -357,29 +422,126 @@ class UnknownPage(QWidget):
             self._image_cache.popitem(last=False)
         return img
 
-    def _face_pixmap(self, face: UnknownFace, size: int) -> QPixmap:
-        key = (face.face_id, int(size))
-        if key in self._thumb_cache:
-            return self._thumb_cache[key]
+    def _thumb_path(self, face: UnknownFace, size: int) -> Path:
+        bucket = self._thumb_root / f"{int(face.face_id) // 1000:05d}"
+        return bucket / f"{int(face.face_id)}_{int(size)}.jpg"
 
+    def _build_thumb_file(self, face: UnknownFace, size: int) -> Path | None:
         image = self._read_image_cached(face.path)
         if image is None:
-            pix = QPixmap()
-            self._thumb_cache[key] = pix
-            return pix
+            return None
 
         crop = image[face.y:face.y + face.h, face.x:face.x + face.w]
         if crop.size == 0:
-            pix = QPixmap()
-            self._thumb_cache[key] = pix
-            return pix
+            return None
 
-        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        hh, ww, _ = rgb.shape
-        qimg = QImage(rgb.data, ww, hh, 3 * ww, IMG_RGB888)
-        pix = QPixmap.fromImage(qimg).scaled(size, size, ASPECT_KEEP, TRANS_SMOOTH)
+        src_h, src_w = crop.shape[:2]
+        if src_h <= 0 or src_w <= 0:
+            return None
+
+        scale = min(float(size) / float(src_w), float(size) / float(src_h))
+        new_w = max(1, int(round(src_w * scale)))
+        new_h = max(1, int(round(src_h * scale)))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(crop, (new_w, new_h), interpolation=interp)
+
+        canvas = np.full((int(size), int(size), 3), 245, dtype=np.uint8)
+        off_x = max(0, (int(size) - new_w) // 2)
+        off_y = max(0, (int(size) - new_h) // 2)
+        canvas[off_y:off_y + new_h, off_x:off_x + new_w] = resized
+
+        thumb_path = self._thumb_path(face, size)
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        ok = bool(cv2.imwrite(str(thumb_path), canvas, [int(cv2.IMWRITE_JPEG_QUALITY), int(THUMB_JPEG_QUALITY)]))
+        if not ok:
+            return None
+        return thumb_path
+
+    def _face_pixmap(self, face: UnknownFace, size: int) -> QPixmap:
+        key = (int(face.face_id), int(size))
+        cached = self._thumb_cache.get(key)
+        if cached is not None:
+            return cached
+
+        thumb_path = self._thumb_path(face, size)
+        if not thumb_path.exists():
+            built = self._build_thumb_file(face, size)
+            if built is None:
+                pix = QPixmap()
+                self._thumb_cache[key] = pix
+                return pix
+            thumb_path = built
+
+        pix = QPixmap(str(thumb_path))
+        if pix.isNull():
+            try:
+                thumb_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            rebuilt = self._build_thumb_file(face, size)
+            if rebuilt is None:
+                pix = QPixmap()
+                self._thumb_cache[key] = pix
+                return pix
+            pix = QPixmap(str(rebuilt))
+
+        if not pix.isNull() and (pix.width() != int(size) or pix.height() != int(size)):
+            pix = pix.scaled(int(size), int(size), ASPECT_KEEP, TRANS_SMOOTH)
         self._thumb_cache[key] = pix
         return pix
+
+    def _go_prev_page(self) -> None:
+        if self._current_page <= 0:
+            return
+        self._current_page -= 1
+        self._render()
+        self._update_pagination_controls()
+        self._update_status()
+        self.scroll.verticalScrollBar().setValue(0)
+
+    def _go_next_page(self) -> None:
+        total_pages = self._total_pages()
+        if self._current_page + 1 >= total_pages:
+            return
+        self._current_page += 1
+        self._render()
+        self._update_pagination_controls()
+        self._update_status()
+        self.scroll.verticalScrollBar().setValue(0)
+
+    def _on_page_size_changed(self, _index: int) -> None:
+        data = self.page_size_box.currentData()
+        if data is None:
+            return
+        try:
+            new_size = int(data)
+        except Exception:
+            return
+        if new_size <= 0 or new_size == int(self._page_size):
+            return
+        self._page_size = int(new_size)
+        self._current_page = 0
+        self._render()
+        self._update_pagination_controls()
+        self._update_status()
+        self.scroll.verticalScrollBar().setValue(0)
+
+    def _update_pagination_controls(self) -> None:
+        total_items = len(self._filtered)
+        total_pages = self._total_pages()
+        if total_items <= 0 or total_pages <= 0:
+            self.page_info.setText("Page 0/0")
+            self.btn_prev.setEnabled(False)
+            self.btn_next.setEnabled(False)
+            return
+
+        start = self._current_page * self._page_size + 1
+        end = min(total_items, start + self._page_size - 1)
+        self.page_info.setText(
+            f"Page {self._current_page + 1}/{total_pages} | showing {start}-{end} of {total_items}"
+        )
+        self.btn_prev.setEnabled(self._current_page > 0)
+        self.btn_next.setEnabled(self._current_page + 1 < total_pages)
 
     def _on_select_face(self, face_id: int) -> None:
         if face_id in self._selected_ids:
@@ -399,12 +561,19 @@ class UnknownPage(QWidget):
         dlg.exec()
 
     def _update_status(self) -> None:
-        self.subtle.setText(f"{len(self._filtered)} faces | {len(self._selected_ids)} selected")
+        total_pages = self._total_pages()
+        if total_pages <= 0:
+            page_text = "page 0/0"
+        else:
+            page_text = f"page {self._current_page + 1}/{total_pages}"
+        self.subtle.setText(
+            f"{len(self._filtered)} faces | {page_text} | {len(self._selected_ids)} selected"
+        )
 
     def _run_assign_with_progress(self, face_ids: Sequence[int], person_id: int) -> None:
         ids = [int(fid) for fid in face_ids]
         assign_total = max(1, len(ids))
-        update_total = max(1, len(self._faces))
+        update_total = max(1, len(ids))
         grand_total = assign_total + update_total
 
         dlg = QProgressDialog("Assigning faces...", "", 0, grand_total, self)
@@ -438,10 +607,9 @@ class UnknownPage(QWidget):
 
         try:
             db_assign_faces_to_person(ids, int(person_id), progress_cb=_on_progress)
-            dlg.setLabelText("Recomputing person prototype...")
+            dlg.setLabelText("Updating unknown view...")
             dlg.setValue(assign_total)
             QApplication.processEvents()
-            dlg.setLabelText("Updating unknown view...")
             self._remove_assigned_faces_from_view(ids, progress_cb=_on_update_progress)
             dlg.setValue(grand_total)
             QApplication.processEvents()
@@ -458,9 +626,16 @@ class UnknownPage(QWidget):
         if not remove_set:
             return
 
+        total = max(1, len(remove_set))
+        if progress_cb is not None:
+            progress_cb(0, total, "Updating unknown view...")
+
         self._faces = [face for face in self._faces if int(face.face_id) not in remove_set]
         self._selected_ids = [fid for fid in self._selected_ids if int(fid) not in remove_set]
         self._prune_thumb_cache({int(face.face_id) for face in self._faces})
+
+        if progress_cb is not None:
+            progress_cb(total, total, "Updating unknown view...")
         self._apply_filter(progress_cb=progress_cb)
 
     def _assign_selected(self) -> None:
@@ -588,6 +763,7 @@ class UnknownPage(QWidget):
         self._selected_ids = []
         self._mark_pages_dirty()
         self.refresh()
+
     def _mark_pages_dirty(self) -> None:
         win = self.window()
         if win is None:

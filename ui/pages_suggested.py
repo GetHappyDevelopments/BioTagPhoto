@@ -35,6 +35,7 @@ ORIENT_H = Qt.Orientation.Horizontal
 ASPECT_KEEP = Qt.AspectRatioMode.KeepAspectRatio
 TRANS_SMOOTH = Qt.TransformationMode.SmoothTransformation
 IMG_RGB888 = QImage.Format.Format_RGB888
+SUGGEST_CHUNK_SIZE = 1000
 
 
 SETTINGS_ORG = "BioTagPhoto"
@@ -153,6 +154,10 @@ def db_add_excluded_image(path: str) -> None:
 
 def db_add_excluded_face(face_id: int) -> None:
     _call_db("add_excluded_face", int(face_id))
+
+
+class DryRunCancelled(Exception):
+    pass
 
 
 class SuggestedPage(QWidget):
@@ -325,7 +330,11 @@ class SuggestedPage(QWidget):
             f"Unknown faces: {unknown_faces} | People: {known_people} | Dry-run matches: {int(dry_run_matches)}"
         )
 
-    def _refresh_match_table(self, progress_cb: Callable[[int, int, str], None] | None = None) -> None:
+    def _refresh_match_table(
+        self,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+        cancel_cb: Callable[[], bool] | None = None,
+    ) -> None:
         person_filter_id = self._current_person_filter_id()
         if person_filter_id <= 0:
             rows = list(self._last_dry_run)
@@ -338,6 +347,8 @@ class SuggestedPage(QWidget):
         if progress_cb is not None:
             progress_cb(0, total, "Preparing suggested tiles...")
         for i, row in enumerate(rows):
+            if cancel_cb is not None and cancel_cb():
+                raise DryRunCancelled()
             self.tbl_matches.setRowHeight(i, 60)
             thumb_item = QTableWidgetItem("")
             thumb = self._face_thumb_pixmap(int(row.face_id), 56)
@@ -415,38 +426,50 @@ class SuggestedPage(QWidget):
     def _compute_dry_run_rows(
         self,
         progress_cb: Callable[[int, int, str], None] | None = None,
+        cancel_cb: Callable[[], bool] | None = None,
     ) -> list[SuggestionRow]:
         threshold = float(self._auto_threshold)
         rows: list[SuggestionRow] = []
-        face_ids = [int(face.face_id) for face in self._faces]
-        suggestions_by_face = db_suggest_people_for_faces(face_ids, top_k=1)
-
         total = max(1, len(self._faces))
         if progress_cb is not None:
             progress_cb(0, total, "Computing similar faces...")
 
-        for i, face in enumerate(self._faces, start=1):
-            suggestions = suggestions_by_face.get(int(face.face_id), [])
-            if not suggestions:
+        chunk_size = max(1, int(SUGGEST_CHUNK_SIZE))
+        processed = 0
+        for start in range(0, len(self._faces), chunk_size):
+            if cancel_cb is not None and cancel_cb():
+                raise DryRunCancelled()
+
+            chunk = self._faces[start:start + chunk_size]
+            chunk_face_ids = [int(face.face_id) for face in chunk]
+            suggestions_by_face = db_suggest_people_for_faces(chunk_face_ids, top_k=1)
+
+            for face in chunk:
+                if cancel_cb is not None and cancel_cb():
+                    raise DryRunCancelled()
+                processed += 1
+                suggestions = suggestions_by_face.get(int(face.face_id), [])
+                if suggestions:
+                    person_id, score = suggestions[0]
+                    if float(score) >= threshold:
+                        person_name = self._person_name_by_id.get(int(person_id), f"Person {int(person_id)}")
+                        rows.append(
+                            SuggestionRow(
+                                face_id=int(face.face_id),
+                                person_id=int(person_id),
+                                person_name=str(person_name),
+                                score=float(score),
+                            )
+                        )
                 if progress_cb is not None:
-                    progress_cb(i, total, f"Computing similar faces... {i}/{total}")
-                continue
-            person_id, score = suggestions[0]
-            if float(score) < threshold:
-                if progress_cb is not None:
-                    progress_cb(i, total, f"Computing similar faces... {i}/{total}")
-                continue
-            person_name = self._person_name_by_id.get(int(person_id), f"Person {int(person_id)}")
-            rows.append(
-                SuggestionRow(
-                    face_id=int(face.face_id),
-                    person_id=int(person_id),
-                    person_name=str(person_name),
-                    score=float(score),
+                    progress_cb(processed, total, f"Computing similar faces... {processed}/{total}")
+
+            if progress_cb is not None and processed < total:
+                progress_cb(
+                    processed,
+                    total,
+                    f"Computing similar faces... {processed}/{total} (chunk {start // chunk_size + 1})",
                 )
-            )
-            if progress_cb is not None:
-                progress_cb(i, total, f"Computing similar faces... {i}/{total}")
         rows.sort(key=lambda r: r.score, reverse=True)
         return rows
 
@@ -529,16 +552,19 @@ class SuggestedPage(QWidget):
         render_total = max(1, len(self._faces))
         grand_total = compute_total + render_total
 
-        dlg = QProgressDialog("Computing similar faces...", "", 0, grand_total, self)
+        dlg = QProgressDialog("Computing similar faces...", "Cancel", 0, grand_total, self)
         dlg.setWindowTitle("Similar faces")
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
-        dlg.setCancelButton(None)
         dlg.setAutoClose(False)
         dlg.setAutoReset(False)
         dlg.setValue(0)
         dlg.show()
         QApplication.processEvents()
+
+        def _is_cancelled() -> bool:
+            QApplication.processEvents()
+            return bool(dlg.wasCanceled())
 
         def _compute_cb(current: int, total: int, message: str) -> None:
             t = max(1, int(total))
@@ -559,17 +585,24 @@ class SuggestedPage(QWidget):
             QApplication.processEvents()
 
         rows: list[SuggestionRow] = []
+        was_cancelled = False
         try:
-            rows = self._compute_dry_run_rows(progress_cb=_compute_cb)
+            rows = self._compute_dry_run_rows(progress_cb=_compute_cb, cancel_cb=_is_cancelled)
             self._last_dry_run = rows
-            self._refresh_match_table(progress_cb=_render_cb)
+            self._refresh_match_table(progress_cb=_render_cb, cancel_cb=_is_cancelled)
             self._update_status(dry_run_matches=len(rows))
             dlg.setValue(grand_total)
             dlg.setLabelText("Done.")
             QApplication.processEvents()
+        except DryRunCancelled:
+            was_cancelled = True
         finally:
             dlg.close()
             dlg.deleteLater()
+
+        if was_cancelled:
+            self.subtle.setText("Similar faces canceled.")
+            return
 
         if not rows:
             QMessageBox.information(self, "Dry-run", "No matches above threshold.")

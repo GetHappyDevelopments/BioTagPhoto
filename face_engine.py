@@ -9,6 +9,7 @@ import onnxruntime as ort
 
 from model_config import MODEL_PACK_NAME, ensure_saved_model_root
 
+
 class FaceEngine:
     def __init__(self):
         try:
@@ -58,16 +59,21 @@ class FaceEngine:
                 return models_dir
         return None
 
-    def detect_faces(self, image_path):
-        img = cv2.imread(image_path)
+    def detect_faces(self, image_path: str) -> list[dict[str, object]]:
+        img = cv2.imread(str(image_path))
+        if img is None:
+            raise ValueError(f"Could not read image: {image_path}")
+
         faces = self.app.get(img)
 
-        results = []
+        results: list[dict[str, object]] = []
         for f in faces:
             x1, y1, x2, y2 = f.bbox.astype(int).tolist()
-            results.append({
-                "bbox": (x1, y1, x2 - x1, y2 - y1),
-                "embedding": f.embedding.astype(np.float32)
-            })
+            results.append(
+                {
+                    "bbox": (x1, y1, x2 - x1, y2 - y1),
+                    "embedding": f.embedding.astype(np.float32),
+                }
+            )
 
         return results

@@ -69,16 +69,21 @@ def ingest_folder(folder: str, progress_callback: Optional[Callable[[int, int], 
 
             row = cur.execute("SELECT id FROM photos WHERE path=?", (path,)).fetchone()
             if row is not None:
-                # Already analyzed: keep existing DB rows untouched to avoid churn/inconsistency.
                 if progress_callback is not None:
                     progress_callback(int(idx), total)
-                print(f"Skipped (already analyzed): {path}")
+                continue
+
+            try:
+                faces = engine.detect_faces(path)
+            except Exception:
+                conn.rollback()
+                if progress_callback is not None:
+                    progress_callback(int(idx), total)
                 continue
 
             cur.execute("INSERT INTO photos(path) VALUES(?)", (path,))
             photo_id = int(cur.lastrowid)
 
-            faces = engine.detect_faces(path)
             for face in faces:
                 x, y, w, h = face["bbox"]
                 cur.execute(
@@ -92,7 +97,6 @@ def ingest_folder(folder: str, progress_callback: Optional[Callable[[int, int], 
                     _upsert_face_embedding_with_conn(conn, face_id, np.asarray(emb, dtype=np.float32))
 
             conn.commit()
-            print(f"Imported: {path} (faces={len(faces)})")
             if progress_callback is not None:
                 progress_callback(int(idx), total)
 
