@@ -283,6 +283,7 @@ class SuggestedPage(QWidget):
         _ignored: object | None = None,
         progress_cb: Callable[[int, int, str], None] | None = None,
     ) -> None:
+        previous_person_filter_id = self._current_person_filter_id()
         cb = progress_cb if callable(progress_cb) else None
         if cb is not None:
             cb(0, 4, "Loading unknown faces...")
@@ -295,7 +296,7 @@ class SuggestedPage(QWidget):
         self._last_dry_run = []
         self._visible_dry_run = []
         self._thumb_cache.clear()
-        self._refresh_person_filter()
+        self._refresh_person_filter(selected_person_id=previous_person_filter_id)
         if cb is not None:
             cb(2, 4, "Preparing suggested matches...")
         self._refresh_match_table(progress_cb=cb)
@@ -303,13 +304,16 @@ class SuggestedPage(QWidget):
             cb(4, 4, "Suggested view ready.")
         self._update_status()
 
-    def _refresh_person_filter(self) -> None:
+    def _refresh_person_filter(self, selected_person_id: int = 0) -> None:
         self.cmb_person_filter.blockSignals(True)
         self.cmb_person_filter.clear()
         self.cmb_person_filter.addItem("All persons", 0)
         for pid, name, _cnt in self._people:
             self.cmb_person_filter.addItem(str(name), int(pid))
-        self.cmb_person_filter.setCurrentIndex(0)
+        selected_index = self.cmb_person_filter.findData(int(selected_person_id))
+        if selected_index < 0:
+            selected_index = 0
+        self.cmb_person_filter.setCurrentIndex(selected_index)
         self.cmb_person_filter.blockSignals(False)
 
     def _current_person_filter_id(self) -> int:
@@ -357,7 +361,15 @@ class SuggestedPage(QWidget):
                 thumb_item.setData(Qt.ItemDataRole.DecorationRole, thumb)
             self.tbl_matches.setItem(i, 0, thumb_item)
             self.tbl_matches.setItem(i, 1, QTableWidgetItem(str(row.face_id)))
-            self.tbl_matches.setItem(i, 2, QTableWidgetItem(str(row.person_name)))
+            person_combo = QComboBox()
+            selected_idx = -1
+            for combo_idx, (pid, name, _cnt) in enumerate(self._people):
+                person_combo.addItem(str(name), int(pid))
+                if int(pid) == int(row.person_id):
+                    selected_idx = combo_idx
+            if selected_idx >= 0:
+                person_combo.setCurrentIndex(selected_idx)
+            self.tbl_matches.setCellWidget(i, 2, person_combo)
             self.tbl_matches.setItem(i, 3, QTableWidgetItem(f"{row.score:.4f}"))
             if progress_cb is not None:
                 progress_cb(i + 1, total, f"Preparing suggested tiles... {i + 1}/{total}")
@@ -545,7 +557,26 @@ class SuggestedPage(QWidget):
             row_idx = int(idx.row())
             if row_idx < 0 or row_idx >= len(self._visible_dry_run):
                 continue
-            selected.append(self._visible_dry_run[row_idx])
+            base_row = self._visible_dry_run[row_idx]
+            selected_person_id = int(base_row.person_id)
+            selected_person_name = str(base_row.person_name)
+            widget = self.tbl_matches.cellWidget(row_idx, 2)
+            combo = widget if isinstance(widget, QComboBox) else None
+            if combo is not None:
+                current_data = combo.currentData()
+                try:
+                    selected_person_id = int(current_data) if current_data is not None else int(base_row.person_id)
+                except Exception:
+                    selected_person_id = int(base_row.person_id)
+                selected_person_name = str(combo.currentText() or selected_person_name)
+            selected.append(
+                SuggestionRow(
+                    face_id=int(base_row.face_id),
+                    person_id=int(selected_person_id),
+                    person_name=str(selected_person_name),
+                    score=float(base_row.score),
+                )
+            )
         return selected
 
     def _run_dry_run(self) -> None:
