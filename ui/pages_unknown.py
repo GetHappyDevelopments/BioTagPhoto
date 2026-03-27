@@ -196,6 +196,7 @@ class UnknownPage(QWidget):
         self._image_cache_max = 24
         self._current_page = 0
         self._page_size = int(DEFAULT_PAGE_SIZE)
+        self._last_assign_person_id: int | None = None
         self._thumb_root = Path(getattr(dbmod, "APP_DATA_DIR", Path.cwd())) / "face_thumbs"
         self._thumb_root.mkdir(parents=True, exist_ok=True)
 
@@ -704,6 +705,10 @@ class UnknownPage(QWidget):
         combo = QComboBox()
         for pid, name, cnt in people:
             combo.addItem(f"{name} ({cnt} faces)", int(pid))
+        if self._last_assign_person_id is not None:
+            previous_idx = combo.findData(int(self._last_assign_person_id))
+            if previous_idx >= 0:
+                combo.setCurrentIndex(previous_idx)
         lay.addWidget(combo)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dlg.accept)
@@ -716,6 +721,7 @@ class UnknownPage(QWidget):
         if pid_data is None:
             return
         person_id = int(cast(Any, pid_data))
+        self._last_assign_person_id = int(person_id)
         try:
             self._run_assign_with_progress(self._selected_ids, person_id)
             self._mark_pages_dirty()
@@ -748,6 +754,7 @@ class UnknownPage(QWidget):
 
         try:
             pid = db_create_person(name)
+            self._last_assign_person_id = int(pid)
             self._run_assign_with_progress(self._selected_ids, int(pid))
             self._mark_pages_dirty()
         except Exception as e:

@@ -380,7 +380,7 @@ class PeoplePage(QWidget):
         self.btn_metadata.setObjectName("Ghost")
         self.btn_metadata.setEnabled(False)
 
-        self.btn_remove_faces = QPushButton("Remove")
+        self.btn_remove_faces = QPushButton("Unassign selected")
         self.btn_remove_faces.setObjectName("Ghost")
         self.btn_remove_faces.setEnabled(False)
 
@@ -389,12 +389,12 @@ class PeoplePage(QWidget):
         self.btn_delete.setEnabled(False)
 
         btn_row.addWidget(self.btn_rename)
-        btn_row.addWidget(self.btn_unassign)
         btn_row.addWidget(self.btn_recompute)
         btn_row.addWidget(self.btn_tag_photo)
         btn_row.addWidget(self.btn_tag_all_photos)
         btn_row.addWidget(self.btn_metadata)
         btn_row.addWidget(self.btn_remove_faces)
+        btn_row.addWidget(self.btn_unassign)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_delete)
         right_lay.addLayout(btn_row)
