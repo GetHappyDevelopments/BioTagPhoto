@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from image_loader import load_bgr_image
 from model_config import MODEL_PACK_NAME, ensure_saved_model_root
 
 
@@ -60,7 +61,7 @@ class FaceEngine:
         return None
 
     def detect_faces(self, image_path: str) -> list[dict[str, object]]:
-        img = cv2.imread(str(image_path))
+        img = load_bgr_image(str(image_path))
         if img is None:
             raise ValueError(f"Could not read image: {image_path}")
 

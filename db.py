@@ -283,33 +283,22 @@ def _ensure_embedding_columns(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE face_embeddings ADD COLUMN dim INTEGER")
         if "created_at" not in cols:
             conn.execute("ALTER TABLE face_embeddings ADD COLUMN created_at TEXT")
-        if "model" in cols and "updated_at" in cols:
-            conn.execute(
-                """
-                UPDATE face_embeddings
-                SET model_id = COALESCE(NULLIF(model_id, ''), NULLIF(model, ''), 'default'),
-                    dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
-                    created_at = COALESCE(created_at, updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-                """
-            )
-        elif "model" in cols:
-            conn.execute(
-                """
-                UPDATE face_embeddings
-                SET model_id = COALESCE(NULLIF(model_id, ''), NULLIF(model, ''), 'default'),
-                    dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
-                    created_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-                """
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE face_embeddings
-                SET model_id = COALESCE(NULLIF(model_id, ''), 'default'),
-                    dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
-                    created_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-                """
-            )
+        cols = _table_columns(conn, "face_embeddings")
+        face_model_expr = "NULLIF(model_id, '')"
+        if "model" in cols:
+            face_model_expr = f"COALESCE({face_model_expr}, NULLIF(model, ''))"
+        face_created_expr = "created_at"
+        if "updated_at" in cols:
+            face_created_expr = f"COALESCE({face_created_expr}, updated_at)"
+        face_created_expr = f"COALESCE({face_created_expr}, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"
+        conn.execute(
+            f"""
+            UPDATE face_embeddings
+            SET model_id = COALESCE({face_model_expr}, 'default'),
+                dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
+                created_at = {face_created_expr}
+            """
+        )
 
     if _table_exists(conn, "person_prototypes"):
         cols = _table_columns(conn, "person_prototypes")
@@ -321,30 +310,26 @@ def _ensure_embedding_columns(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE person_prototypes ADD COLUMN sample_count INTEGER")
         if "updated_at" not in cols:
             conn.execute("ALTER TABLE person_prototypes ADD COLUMN updated_at TEXT")
+        cols = _table_columns(conn, "person_prototypes")
+        prototype_model_expr = "NULLIF(model_id, '')"
         if "model" in cols:
-            conn.execute(
-                """
-                UPDATE person_prototypes
-                SET model_id = COALESCE(NULLIF(model_id, ''), NULLIF(model, ''), 'default'),
-                    dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
-                    sample_count = COALESCE(sample_count, 0),
-                    updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-                """
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE person_prototypes
-                SET model_id = COALESCE(NULLIF(model_id, ''), 'default'),
-                    dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
-                    sample_count = COALESCE(sample_count, 0),
-                    updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-                """
-            )
+            prototype_model_expr = f"COALESCE({prototype_model_expr}, NULLIF(model, ''))"
+        conn.execute(
+            f"""
+            UPDATE person_prototypes
+            SET model_id = COALESCE({prototype_model_expr}, 'default'),
+                dim = COALESCE(dim, CAST(LENGTH(embedding) / 4 AS INTEGER)),
+                sample_count = COALESCE(sample_count, 0),
+                updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            """
+        )
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces(person_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_face_embeddings_model_id ON face_embeddings(model_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_person_prototypes_model_id ON person_prototypes(model_id)")
+    if _table_exists(conn, "faces"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces(person_id)")
+    if _table_exists(conn, "face_embeddings"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_face_embeddings_model_id ON face_embeddings(model_id)")
+    if _table_exists(conn, "person_prototypes"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_person_prototypes_model_id ON person_prototypes(model_id)")
 
 
 def ensure_schema() -> None:

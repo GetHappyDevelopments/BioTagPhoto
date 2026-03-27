@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QObject
 
+from image_loader import load_bgr_image
 from db import (
     get_face_embedding,
     list_all_faces_with_rects,
@@ -103,7 +104,7 @@ def build_rebuild_face_embeddings_task(
                     ctx.report_progress(idx, total)
                     continue
 
-                image = cv2.imread(photo_path)
+                image = load_bgr_image(photo_path)
                 if image is None:
                     res.failed += 1
                     ctx.report_progress(idx, total)

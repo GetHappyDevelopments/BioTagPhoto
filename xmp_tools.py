@@ -218,3 +218,35 @@ def remove_person_name_from_xmp(image_path: str, person_name: str) -> str:
     except Exception:
         return "error"
 
+
+def has_person_name_in_xmp(image_path: str, person_name: str) -> bool:
+    path = Path(image_path)
+    if not path.exists() or not path.is_file():
+        return False
+
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return False
+
+    if len(data) < 4 or data[0:2] != b"\xFF\xD8":
+        return False
+
+    try:
+        xmp_span = _find_jpeg_xmp_segment(data)
+        if xmp_span is None:
+            return False
+
+        start, end = xmp_span
+        old_seg = data[start:end]
+        payload = old_seg[4:]
+        xml_old = payload[len(XMP_HEADER):]
+        text = xml_old.decode("utf-8", errors="replace")
+        root = ET.fromstring(text)
+
+        for li in root.findall(f".//{{{NS_DC}}}subject/{{{NS_RDF}}}Bag/{{{NS_RDF}}}li"):
+            if (li.text or "").strip() == person_name:
+                return True
+        return False
+    except Exception:
+        return False

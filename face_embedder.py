@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import cv2
 
+from image_loader import load_bgr_image
 
 @dataclass(frozen=True)
 class FaceRect:
@@ -87,7 +88,7 @@ class FaceEmbedder:
         Uses the known face rect from DB; no re-detection needed.
         """
         path = Path(image_path)
-        img_bgr = cv2.imread(str(path))
+        img_bgr = load_bgr_image(str(path))
         if img_bgr is None:
             return None
 

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialog_photo_viewer import PhotoViewerDialog
+from image_loader import load_bgr_image
 import db as dbmod
 
 
@@ -269,6 +270,20 @@ class UnknownPage(QWidget):
         self.page_info.setObjectName("Subtle")
         paging.addWidget(self.page_info)
 
+        paging.addWidget(QLabel("Page:"))
+
+        self.page_jump = QLineEdit()
+        self.page_jump.setObjectName("Search")
+        self.page_jump.setPlaceholderText("1")
+        self.page_jump.setFixedWidth(64)
+        self.page_jump.returnPressed.connect(self._go_to_page_from_input)
+        paging.addWidget(self.page_jump)
+
+        self.btn_go_page = QPushButton("Go")
+        self.btn_go_page.setObjectName("Ghost")
+        self.btn_go_page.clicked.connect(self._go_to_page_from_input)
+        paging.addWidget(self.btn_go_page)
+
         paging.addStretch(1)
         paging.addWidget(QLabel("Per page:"))
 
@@ -413,7 +428,7 @@ class UnknownPage(QWidget):
             self._image_cache.move_to_end(key)
             return cached
 
-        img = cv2.imread(key)
+        img = load_bgr_image(key)
         if img is None:
             return None
 
@@ -509,6 +524,36 @@ class UnknownPage(QWidget):
         self._update_status()
         self.scroll.verticalScrollBar().setValue(0)
 
+    def _go_to_page_from_input(self) -> None:
+        total_pages = self._total_pages()
+        if total_pages <= 0:
+            self.page_jump.clear()
+            return
+
+        raw = self.page_jump.text().strip()
+        if not raw:
+            self.page_jump.setText(str(self._current_page + 1))
+            return
+
+        try:
+            page_number = int(raw)
+        except Exception:
+            self.page_jump.setText(str(self._current_page + 1))
+            self.page_jump.selectAll()
+            return
+
+        page_number = max(1, min(page_number, total_pages))
+        target_page = page_number - 1
+        if target_page == int(self._current_page):
+            self.page_jump.setText(str(page_number))
+            return
+
+        self._current_page = int(target_page)
+        self._render()
+        self._update_pagination_controls()
+        self._update_status()
+        self.scroll.verticalScrollBar().setValue(0)
+
     def _on_page_size_changed(self, _index: int) -> None:
         data = self.page_size_box.currentData()
         if data is None:
@@ -533,6 +578,9 @@ class UnknownPage(QWidget):
             self.page_info.setText("Page 0/0")
             self.btn_prev.setEnabled(False)
             self.btn_next.setEnabled(False)
+            self.page_jump.clear()
+            self.page_jump.setEnabled(False)
+            self.btn_go_page.setEnabled(False)
             return
 
         start = self._current_page * self._page_size + 1
@@ -542,6 +590,9 @@ class UnknownPage(QWidget):
         )
         self.btn_prev.setEnabled(self._current_page > 0)
         self.btn_next.setEnabled(self._current_page + 1 < total_pages)
+        self.page_jump.setEnabled(True)
+        self.btn_go_page.setEnabled(True)
+        self.page_jump.setText(str(self._current_page + 1))
 
     def _on_select_face(self, face_id: int) -> None:
         if face_id in self._selected_ids:

@@ -7,6 +7,7 @@ from typing import Protocol, Sequence
 import cv2
 import numpy as np
 
+from image_loader import load_bgr_image
 from db import (
     iter_faces_for_embedding,
     list_people_ids,
@@ -47,7 +48,7 @@ def set_embedding_backend(backend: EmbeddingBackend) -> None:
 
 def _crop_face_bgr(image_path: str, face_rect: Rect) -> np.ndarray:
     path = str(Path(image_path))
-    img = cv2.imread(path)
+    img = load_bgr_image(path)
     if img is None:
         raise FileNotFoundError(f"Image not found or unreadable: {path}")
 

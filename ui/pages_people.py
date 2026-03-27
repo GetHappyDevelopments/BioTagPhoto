@@ -11,12 +11,13 @@ from PySide6.QtWidgets import (
     QApplication,
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QScrollArea, QGridLayout,
     QFrame, QSplitter, QPushButton, QMessageBox, QInputDialog,
-    QLineEdit, QComboBox, QGraphicsDropShadowEffect, QProgressDialog
+    QLineEdit, QComboBox, QGraphicsDropShadowEffect, QProgressDialog, QCheckBox
 )
 
 from .dialog_photo_viewer import PhotoViewerDialog
 from .dialog_metadata import MetadataDialog
-from xmp_tools import ensure_person_name_in_xmp, remove_person_name_from_xmp
+from image_loader import load_bgr_image
+from xmp_tools import ensure_person_name_in_xmp, has_person_name_in_xmp, remove_person_name_from_xmp
 
 from db import (
     list_people_with_face_count,
@@ -37,6 +38,8 @@ CURSOR_POINTING = Qt.CursorShape.PointingHandCursor
 ASPECT_KEEP = Qt.AspectRatioMode.KeepAspectRatio
 TRANS_SMOOTH = Qt.TransformationMode.SmoothTransformation
 IMG_RGB888 = QImage.Format.Format_RGB888
+DEFAULT_FACE_PAGE_SIZE = 240
+FACE_PAGE_SIZE_OPTIONS = (120, 240, 480, 960)
 
 
 PAGE_QSS = """
@@ -369,6 +372,10 @@ class PeoplePage(QWidget):
         self.btn_tag_photo.setObjectName("Ghost")
         self.btn_tag_photo.setEnabled(False)
 
+        self.btn_tag_all_photos = QPushButton("Tag all Photos")
+        self.btn_tag_all_photos.setObjectName("Ghost")
+        self.btn_tag_all_photos.setEnabled(False)
+
         self.btn_metadata = QPushButton("Metadata")
         self.btn_metadata.setObjectName("Ghost")
         self.btn_metadata.setEnabled(False)
@@ -385,11 +392,63 @@ class PeoplePage(QWidget):
         btn_row.addWidget(self.btn_unassign)
         btn_row.addWidget(self.btn_recompute)
         btn_row.addWidget(self.btn_tag_photo)
+        btn_row.addWidget(self.btn_tag_all_photos)
         btn_row.addWidget(self.btn_metadata)
         btn_row.addWidget(self.btn_remove_faces)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_delete)
         right_lay.addLayout(btn_row)
+
+        face_paging = QHBoxLayout()
+        face_paging.setSpacing(8)
+
+        self.btn_faces_prev = QPushButton("Previous")
+        self.btn_faces_prev.setObjectName("Ghost")
+        self.btn_faces_prev.setEnabled(False)
+        self.btn_faces_prev.clicked.connect(self._go_prev_face_page)
+        face_paging.addWidget(self.btn_faces_prev)
+
+        self.btn_faces_next = QPushButton("Next")
+        self.btn_faces_next.setObjectName("Ghost")
+        self.btn_faces_next.setEnabled(False)
+        self.btn_faces_next.clicked.connect(self._go_next_face_page)
+        face_paging.addWidget(self.btn_faces_next)
+
+        self.face_page_info = QLabel("")
+        self.face_page_info.setObjectName("Subtle")
+        face_paging.addWidget(self.face_page_info)
+
+        self.chk_missing_only = QCheckBox("Only missing metadata")
+        self.chk_missing_only.stateChanged.connect(self._on_missing_filter_toggled)
+        face_paging.addWidget(self.chk_missing_only)
+
+        face_paging.addWidget(QLabel("Page:"))
+
+        self.face_page_jump = QLineEdit()
+        self.face_page_jump.setObjectName("Search")
+        self.face_page_jump.setPlaceholderText("1")
+        self.face_page_jump.setFixedWidth(64)
+        self.face_page_jump.returnPressed.connect(self._go_to_face_page_from_input)
+        face_paging.addWidget(self.face_page_jump)
+
+        self.btn_face_page_go = QPushButton("Go")
+        self.btn_face_page_go.setObjectName("Ghost")
+        self.btn_face_page_go.setEnabled(False)
+        self.btn_face_page_go.clicked.connect(self._go_to_face_page_from_input)
+        face_paging.addWidget(self.btn_face_page_go)
+
+        face_paging.addStretch(1)
+        face_paging.addWidget(QLabel("Per page:"))
+
+        self.face_page_size_box = QComboBox()
+        for value in FACE_PAGE_SIZE_OPTIONS:
+            self.face_page_size_box.addItem(str(value), int(value))
+        page_idx = self.face_page_size_box.findData(int(DEFAULT_FACE_PAGE_SIZE))
+        if page_idx >= 0:
+            self.face_page_size_box.setCurrentIndex(page_idx)
+        self.face_page_size_box.currentIndexChanged.connect(self._on_face_page_size_changed)
+        face_paging.addWidget(self.face_page_size_box)
+        right_lay.addLayout(face_paging)
 
         self.faces_scroll = QScrollArea()
         self.faces_scroll.setWidgetResizable(True)
@@ -421,12 +480,19 @@ class PeoplePage(QWidget):
         self._face_order: list[int] = []
         self._selected_face_ids: set[int] = set()
         self._last_selected_face_id: Optional[int] = None
+        self._person_faces: list[tuple[int, str, int, int, int, int]] = []
+        self._visible_person_faces: list[tuple[int, str, int, int, int, int]] = []
+        self._face_page = 0
+        self._face_page_size = int(DEFAULT_FACE_PAGE_SIZE)
+        self._show_only_missing_metadata = False
+        self._name_in_xmp_cache: dict[str, bool] = {}
 
         self.btn_rename.clicked.connect(self._rename_selected)
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_unassign.clicked.connect(self._unassign_selected)
         self.btn_recompute.clicked.connect(self._recompute_selected_prototype)
         self.btn_tag_photo.clicked.connect(self._tag_selected_person_photos)
+        self.btn_tag_all_photos.clicked.connect(self._tag_all_person_photos)
         self.btn_metadata.clicked.connect(self._show_selected_face_metadata)
         self.btn_remove_faces.clicked.connect(self._remove_selected_faces)
 
@@ -565,6 +631,10 @@ class PeoplePage(QWidget):
     def _clear_detail(self):
         self._selected_person_id = None
         self._selected_person_name = ""
+        self._person_faces = []
+        self._visible_person_faces = []
+        self._name_in_xmp_cache.clear()
+        self._face_page = 0
         self.detail_title.setText("No person selected")
         self.detail_sub.setText("")
         self.detail_proto.setText("")
@@ -573,9 +643,16 @@ class PeoplePage(QWidget):
         self.btn_unassign.setEnabled(False)
         self.btn_recompute.setEnabled(False)
         self.btn_tag_photo.setEnabled(False)
+        self.btn_tag_all_photos.setEnabled(False)
         self.btn_metadata.setEnabled(False)
         self.btn_remove_faces.setEnabled(False)
+        self.chk_missing_only.blockSignals(True)
+        self.chk_missing_only.setChecked(False)
+        self.chk_missing_only.blockSignals(False)
+        self.chk_missing_only.setEnabled(False)
+        self._show_only_missing_metadata = False
         self._clear_faces_grid()
+        self._update_face_pagination_controls()
         self._update_selection_visuals()
 
     def _update_selection_visuals(self):
@@ -622,6 +699,11 @@ class PeoplePage(QWidget):
 
     def _select_person(self, person_id: int):
         self._selected_person_id = int(person_id)
+        self._face_page = 0
+        self.chk_missing_only.blockSignals(True)
+        self.chk_missing_only.setChecked(False)
+        self.chk_missing_only.blockSignals(False)
+        self._show_only_missing_metadata = False
         self._load_person_faces_with_progress(self._selected_person_id)
         self._update_selection_visuals()
         self._ensure_selected_visible()
@@ -699,6 +781,7 @@ class PeoplePage(QWidget):
         self.btn_metadata.setEnabled(len(self._face_path_by_id) > 0)
         self.btn_remove_faces.setEnabled(len(self._selected_face_ids) > 0)
         self.btn_tag_photo.setEnabled(len(self._selected_face_ids) > 0)
+        self.btn_tag_all_photos.setEnabled(len(self._visible_person_faces) > 0)
 
     def _show_selected_face_metadata(self) -> None:
         if not self._selected_face_ids:
@@ -741,17 +824,89 @@ class PeoplePage(QWidget):
         self.btn_unassign.setEnabled(len(faces) > 0)
         self.btn_recompute.setEnabled(True)
         self.btn_tag_photo.setEnabled(False)
+        self.btn_tag_all_photos.setEnabled(len(faces) > 0)
         self.btn_metadata.setEnabled(False)
         self.btn_remove_faces.setEnabled(False)
 
+        self._person_faces = [
+            (int(face_id), str(path), int(x), int(y), int(w), int(h))
+            for face_id, path, x, y, w, h in faces
+        ]
+        self._name_in_xmp_cache.clear()
+        self._visible_person_faces = self._build_visible_person_faces(progress_cb=progress_cb)
+        total_pages = self._face_total_pages()
+        if total_pages <= 0:
+            self._face_page = 0
+        else:
+            self._face_page = max(0, min(int(self._face_page), total_pages - 1))
+
+        self.chk_missing_only.setEnabled(len(self._person_faces) > 0)
+        self._render_person_faces(progress_cb=progress_cb)
+        self._update_face_pagination_controls()
+
+    def _face_total_pages(self) -> int:
+        if not self._visible_person_faces:
+            return 0
+        return (len(self._visible_person_faces) + self._face_page_size - 1) // self._face_page_size
+
+    def _face_page_slice(self) -> list[tuple[int, str, int, int, int, int]]:
+        if not self._visible_person_faces:
+            return []
+        start = int(self._face_page * self._face_page_size)
+        end = min(len(self._visible_person_faces), start + self._face_page_size)
+        return self._visible_person_faces[start:end]
+
+    def _build_visible_person_faces(
+        self,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+    ) -> list[tuple[int, str, int, int, int, int]]:
+        if not self._show_only_missing_metadata or not self._selected_person_name.strip():
+            if progress_cb is not None:
+                progress_cb(1, 1, "Preparing face tiles...")
+            return list(self._person_faces)
+
+        person_name = self._selected_person_name.strip()
+        unique_paths = sorted({path for _fid, path, _x, _y, _w, _h in self._person_faces if path.strip()})
+        total_paths = max(1, len(unique_paths))
+        if progress_cb is not None:
+            progress_cb(0, total_paths, "Checking metadata tags...")
+        for i, path in enumerate(unique_paths, start=1):
+            cached = self._name_in_xmp_cache.get(path)
+            if cached is None:
+                self._name_in_xmp_cache[path] = bool(has_person_name_in_xmp(path, person_name))
+            if progress_cb is not None:
+                progress_cb(i, total_paths, f"Checking metadata tags... {i}/{total_paths}")
+
+        visible = [
+            face for face in self._person_faces
+            if not self._name_in_xmp_cache.get(face[1], False)
+        ]
+        return visible
+
+    def _render_person_faces(
+        self,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+    ) -> None:
         self._clear_faces_grid()
+
+        faces = self._face_page_slice()
+        if not faces:
+            empty = QLabel("No faces assigned.")
+            empty.setObjectName("Subtle")
+            empty.setAlignment(ALIGN_CENTER)
+            self.faces_grid.addWidget(empty, 0, 0)
+            if progress_cb is not None:
+                progress_cb(1, 1, "No assigned faces.")
+            return
 
         cols = 6
         r = 0
         c = 0
         total = max(1, len(faces))
+        start_index = self._face_page * self._face_page_size + 1
+        end_index = start_index + len(faces) - 1
         if progress_cb is not None:
-            progress_cb(0, total, "Preparing face tiles...")
+            progress_cb(0, total, f"Preparing face tiles {start_index}-{end_index}...")
         for i, (face_id, path, x, y, w, h) in enumerate(faces, start=1):
             pix = self._face_pixmap(path, x, y, w, h, size=120)
             tile = FaceTile(
@@ -779,6 +934,129 @@ class PeoplePage(QWidget):
         self._selected_face_ids.clear()
         self._last_selected_face_id = None
         self._update_face_selection_visuals()
+        self._update_face_pagination_controls()
+
+    def _go_prev_face_page(self) -> None:
+        if self._face_page <= 0:
+            return
+        self._face_page -= 1
+        self._render_person_faces_with_progress()
+        self.faces_scroll.verticalScrollBar().setValue(0)
+
+    def _go_next_face_page(self) -> None:
+        total_pages = self._face_total_pages()
+        if self._face_page + 1 >= total_pages:
+            return
+        self._face_page += 1
+        self._render_person_faces_with_progress()
+        self.faces_scroll.verticalScrollBar().setValue(0)
+
+    def _on_face_page_size_changed(self, _index: int) -> None:
+        data = self.face_page_size_box.currentData()
+        if data is None:
+            return
+        try:
+            new_size = int(data)
+        except Exception:
+            return
+        if new_size <= 0 or new_size == int(self._face_page_size):
+            return
+        self._face_page_size = int(new_size)
+        self._face_page = 0
+        self._render_person_faces_with_progress()
+        self.faces_scroll.verticalScrollBar().setValue(0)
+
+    def _go_to_face_page_from_input(self) -> None:
+        total_pages = self._face_total_pages()
+        if total_pages <= 0:
+            self.face_page_jump.clear()
+            return
+
+        raw = self.face_page_jump.text().strip()
+        if not raw:
+            self.face_page_jump.setText(str(self._face_page + 1))
+            return
+
+        try:
+            page_number = int(raw)
+        except Exception:
+            self.face_page_jump.setText(str(self._face_page + 1))
+            self.face_page_jump.selectAll()
+            return
+
+        page_number = max(1, min(page_number, total_pages))
+        target_page = page_number - 1
+        if target_page == int(self._face_page):
+            self.face_page_jump.setText(str(page_number))
+            return
+
+        self._face_page = int(target_page)
+        self._render_person_faces_with_progress()
+        self.faces_scroll.verticalScrollBar().setValue(0)
+
+    def _render_person_faces_with_progress(self) -> None:
+        dlg = QProgressDialog("Preparing face tiles...", "", 0, 1, self)
+        dlg.setWindowTitle("Loading Faces")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setCancelButton(None)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        dlg.show()
+        QApplication.processEvents()
+
+        def _cb(current: int, total: int, message: str) -> None:
+            total_i = max(1, int(total))
+            current_i = max(0, min(int(current), total_i))
+            dlg.setRange(0, total_i)
+            dlg.setValue(current_i)
+            dlg.setLabelText(str(message))
+            QApplication.processEvents()
+
+        try:
+            self._visible_person_faces = self._build_visible_person_faces(progress_cb=_cb)
+            self._render_person_faces(progress_cb=_cb)
+            dlg.setRange(0, 1)
+            dlg.setValue(1)
+            dlg.setLabelText("Done.")
+            QApplication.processEvents()
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+
+    def _on_missing_filter_toggled(self, state: int) -> None:
+        self._show_only_missing_metadata = bool(state != 0)
+        self._face_page = 0
+        if self._selected_person_id is None:
+            return
+        self._render_person_faces_with_progress()
+        self.faces_scroll.verticalScrollBar().setValue(0)
+
+    def _update_face_pagination_controls(self) -> None:
+        total_items = len(self._visible_person_faces)
+        total_pages = self._face_total_pages()
+        if total_items <= 0 or total_pages <= 0:
+            self.face_page_info.setText("Page 0/0")
+            self.btn_faces_prev.setEnabled(False)
+            self.btn_faces_next.setEnabled(False)
+            self.face_page_size_box.setEnabled(False)
+            self.face_page_jump.clear()
+            self.face_page_jump.setEnabled(False)
+            self.btn_face_page_go.setEnabled(False)
+            return
+
+        start = self._face_page * self._face_page_size + 1
+        end = min(total_items, start + self._face_page_size - 1)
+        self.face_page_info.setText(
+            f"Page {self._face_page + 1}/{total_pages} | showing {start}-{end} of {total_items}"
+        )
+        self.btn_faces_prev.setEnabled(self._face_page > 0)
+        self.btn_faces_next.setEnabled(self._face_page + 1 < total_pages)
+        self.face_page_size_box.setEnabled(True)
+        self.face_page_jump.setEnabled(True)
+        self.btn_face_page_go.setEnabled(True)
+        self.face_page_jump.setText(str(self._face_page + 1))
 
     def _prototype_status_for_person(self, person_id: int) -> str:
         with get_connection() as conn:
@@ -879,7 +1157,7 @@ class PeoplePage(QWidget):
         return pix if not pix.isNull() else None
 
     def _face_pixmap(self, path: str, x: int, y: int, w: int, h: int, size: int = 120) -> QPixmap:
-        img = cv2.imread(path)
+        img = load_bgr_image(path)
         if img is None:
             return QPixmap()
 
@@ -1097,8 +1375,32 @@ class PeoplePage(QWidget):
             QMessageBox.information(self, "No photos", "No photos found for this person.")
             return
 
+        self._tag_person_photos(unique_paths, dialog_title="Tag Photo")
+
+    def _tag_all_person_photos(self) -> None:
+        if self._selected_person_id is None:
+            return
+        person_name = self._selected_person_name.strip()
+        if not person_name:
+            QMessageBox.warning(self, "Missing person name", "Selected person has no valid name.")
+            return
+
+        source_faces = self._visible_person_faces if self._show_only_missing_metadata else self._person_faces
+        unique_paths = sorted({str(path) for _fid, path, _x, _y, _w, _h in source_faces if str(path).strip()})
+        if not unique_paths:
+            QMessageBox.information(self, "No photos", "No photos found for this person.")
+            return
+
+        self._tag_person_photos(unique_paths, dialog_title="Tag all Photos")
+
+    def _tag_person_photos(self, unique_paths: list[str], dialog_title: str) -> None:
+        person_name = self._selected_person_name.strip()
+        if not person_name:
+            QMessageBox.warning(self, "Missing person name", "Selected person has no valid name.")
+            return
+
         dlg = QProgressDialog("Writing XMP tags...", "", 0, len(unique_paths), self)
-        dlg.setWindowTitle("Tag Photo")
+        dlg.setWindowTitle(str(dialog_title))
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.setCancelButton(None)
@@ -1142,7 +1444,7 @@ class PeoplePage(QWidget):
 
         QMessageBox.information(
             self,
-            "Tag Photo",
+            str(dialog_title),
             "XMP tagging completed.\n\n"
             f"Tagged: {tagged}\n"
             f"Already present: {already}\n"

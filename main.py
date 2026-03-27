@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import ctypes
+
+# Suppress noisy OpenCV decoder warnings in console output.
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QPixmap

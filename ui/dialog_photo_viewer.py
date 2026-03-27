@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QMessageBox
 )
+from image_loader import load_bgr_image
 
 ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
 ASPECT_KEEP = Qt.AspectRatioMode.KeepAspectRatio
@@ -103,7 +104,7 @@ class PhotoViewerDialog(QDialog):
     # ---------------- Image load ----------------
 
     def _load_pixmap_with_overlay(self) -> QPixmap:
-        img = cv2.imread(self._image_path)
+        img = load_bgr_image(self._image_path)
         if img is None:
             return QPixmap()
 

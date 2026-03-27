@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from .dialog_auto_assign_preview import AutoAssignPreviewDialog, AutoAssignPreviewRow
 from .dialog_photo_viewer import PhotoViewerDialog
+from image_loader import load_bgr_image
 import db as dbmod
 
 
@@ -369,7 +370,7 @@ class SuggestedPage(QWidget):
             self._image_cache.move_to_end(key)
             return cached
 
-        img = cv2.imread(key)
+        img = load_bgr_image(key)
         if img is None:
             return None
 
